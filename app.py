@@ -1,71 +1,50 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import date
 import google.generativeai as genai
+from streamlit_gsheets import GSheetsConnection
 
-# --- DATENBANK SETUP ---
-def init_db():
-    conn = sqlite3.connect('volleyball_fitness.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS workouts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            exercise TEXT,
-            weight REAL,
-            reps INTEGER,
-            rpe INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def save_set(exercise, weight, reps, rpe):
-    conn = sqlite3.connect('volleyball_fitness.db')
-    c = conn.cursor()
-    c.execute('INSERT INTO workouts (date, exercise, weight, reps, rpe) VALUES (?, ?, ?, ?, ?)',
-              (date.today().strftime("%Y-%m-%d"), exercise, weight, reps, rpe))
-    conn.commit()
-    conn.close()
-
-def get_exercise_history(exercise):
-    conn = sqlite3.connect('volleyball_fitness.db')
-    df = pd.read_sql_query(f"SELECT date as Datum, weight as 'Gewicht (kg)', reps as Wdh, rpe as RPE FROM workouts WHERE exercise='{exercise}' ORDER BY id DESC LIMIT 3", conn)
-    conn.close()
-    return df
-
-def get_recent_workouts():
-    conn = sqlite3.connect('volleyball_fitness.db')
-    df = pd.read_sql_query("SELECT date, exercise, weight, reps, rpe FROM workouts ORDER BY id DESC LIMIT 15", conn)
-    conn.close()
-    return df
-
-init_db()
-
-# --- APP UI ---
+# --- APP UI SETUP ---
 st.set_page_config(page_title="Volleyball Fitness", layout="centered")
 
-# ==========================================
-# SEITENLEISTE (API & TEST)
-# ==========================================
-st.sidebar.title("⚙️ Einstellungen")
-api_key = st.sidebar.text_input("Gemini API Key", type="password", help="Hole dir einen kostenlosen API Key im Google AI Studio.")
+# --- DATENBANK VERBINDUNG (GOOGLE SHEETS) ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-if st.sidebar.button("API-Verbindung testen"):
-    if not api_key:
-        st.sidebar.error("Bitte gib zuerst einen API-Key ein.")
-    else:
-        with st.spinner("Teste Verbindung..."):
-            try:
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-3.8-flash')
-                response = model.generate_content("Antworte mit einem extrem kurzen, motivierenden Satz für einen Volleyballer, um zu bestätigen, dass die API geht.")
-                st.sidebar.success("✅ Erfolgreich verbunden!")
-                st.sidebar.info(f"Gemini sagt: {response.text}")
-            except Exception as e:
-                st.sidebar.error("❌ Fehler bei der Verbindung. Stimmt der API-Key?")
-                st.sidebar.write(e)
+def get_all_data():
+    try:
+        return conn.read(worksheet="Workouts", usecols=list(range(5)))
+    except:
+        return pd.DataFrame(columns=['date', 'exercise', 'weight', 'reps', 'rpe'])
+
+def save_set(exercise, weight, reps, rpe):
+    df = get_all_data()
+    # Entferne leere Zeilen, die von Google Sheets kommen könnten
+    df = df.dropna(how='all') 
+    
+    new_row = pd.DataFrame([{
+        'date': date.today().strftime("%Y-%m-%d"),
+        'exercise': exercise,
+        'weight': weight,
+        'reps': reps,
+        'rpe': rpe
+    }])
+    
+    updated_df = pd.concat([df, new_row], ignore_index=True)
+    conn.update(worksheet="Workouts", data=updated_df)
+    st.cache_data.clear() # Cache leeren für sofortiges Update
+
+def get_exercise_history(exercise):
+    df = get_all_data()
+    df = df.dropna(how='all')
+    if df.empty:
+        return pd.DataFrame()
+    history = df[df['exercise'] == exercise].tail(3)
+    return history.rename(columns={'date': 'Datum', 'weight': 'Gewicht (kg)', 'reps': 'Wdh', 'rpe': 'RPE'})
+
+def get_recent_workouts():
+    df = get_all_data()
+    df = df.dropna(how='all')
+    return df.tail(15)
 
 st.title("🏐 Athletik Tracker")
 
@@ -110,37 +89,34 @@ with tab1:
     
     st.header("🧠 KI-Trainingsanalyse")
     if st.button("Training analysieren"):
-        if not api_key:
-            st.error("Bitte trage links in der Seitenleiste deinen Gemini API Key ein.")
+        recent_data = get_recent_workouts()
+        if recent_data.empty:
+            st.warning("Trage zuerst ein paar Sätze ein, bevor du die Analyse startest.")
         else:
-            recent_data = get_recent_workouts()
-            if recent_data.empty:
-                st.warning("Trage zuerst ein paar Sätze ein, bevor du die Analyse startest.")
-            else:
-                with st.spinner("Gemini analysiert deine heutigen Sätze..."):
-                    try:
-                        genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel('gemini-3.8-flash')
-                        
-                        prompt = f"""
-                        Du bist der persönliche Fitnesstrainer eines Volleyballspielers. 
-                        Der Spieler hat einen Knorpelschaden Grad 4 im Knie und einen Tennisellbogen. 
-                        Hier sind seine letzten protokollierten Trainingssätze (Gewicht in kg, Wiederholungen, RPE von 1-10):
-                        
-                        {recent_data.to_string(index=False)}
-                        
-                        Analysiere das Training kurz und prägnant. Antworte in 3 kurzen Stichpunkten:
-                        1. **Progression:** Kurze Einschätzung der Leistung.
-                        2. **Empfehlung:** Konkrete Handlungsempfehlung für das nächste Training basierend auf der RPE (z.B. Gewicht hoch/runter).
-                        3. **Verletzungs-Check:** Eine kurze Erinnerung an die schonende Ausführung für Knie oder Ellbogen bei den trainierten Übungen.
-                        
-                        Verwende keine langen Einleitungen, starte direkt mit den Punkten.
-                        """
-                        
-                        response = model.generate_content(prompt)
-                        st.write(response.text)
-                    except Exception as e:
-                        st.error("Es gab ein Problem bei der Analyse. Hast du den API-Key richtig eingegeben?")
+            with st.spinner("Gemini analysiert deine heutigen Sätze..."):
+                try:
+                    # Key wird automatisch aus den Streamlit Secrets geladen
+                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    model = genai.GenerativeModel('gemini-3.8-flash')
+                    
+                    prompt = f"""
+                    Du bist der persönliche Fitnesstrainer eines Volleyballspielers. 
+                    Der Spieler hat einen Knorpelschaden Grad 4 im Knie und einen Tennisellbogen. 
+                    Hier sind seine letzten Trainingssätze:
+                    
+                    {recent_data.to_string(index=False)}
+                    
+                    Analysiere das Training kurz und prägnant. Antworte in 3 kurzen Stichpunkten:
+                    1. **Progression:** Kurze Einschätzung der Leistung.
+                    2. **Empfehlung:** Konkrete Handlungsempfehlung für das nächste Training basierend auf der RPE.
+                    3. **Verletzungs-Check:** Kurze Erinnerung an die schonende Ausführung.
+                    """
+                    
+                    response = model.generate_content(prompt)
+                    st.write(response.text)
+                except Exception as e:
+                    st.error("Es gab ein Problem bei der Analyse.")
+                    st.write(e)
 
 # ==========================================
 # TAB 2: ERNÄHRUNG & EINKAUF
@@ -164,7 +140,6 @@ with tab2:
 
     st.header("Tagesplan & Einkaufsliste")
     
-    # Mahlzeiten-Datenbank
     meal_database = {
         "Frühstück": {
             "Haferflocken-Bowl": ["Haferflocken", "Milch/Pflanzendrink", "Proteinpulver", "Tiefkühlbeeren"],
