@@ -18,7 +18,6 @@ def get_all_data():
 
 def save_set(exercise, weight, reps, rpe):
     df = get_all_data()
-    # Entferne leere Zeilen, die von Google Sheets kommen könnten
     df = df.dropna(how='all') 
     
     new_row = pd.DataFrame([{
@@ -31,7 +30,7 @@ def save_set(exercise, weight, reps, rpe):
     
     updated_df = pd.concat([df, new_row], ignore_index=True)
     conn.update(worksheet="Workouts", data=updated_df)
-    st.cache_data.clear() # Cache leeren für sofortiges Update
+    st.cache_data.clear()
 
 def get_exercise_history(exercise):
     df = get_all_data()
@@ -60,9 +59,26 @@ with tab1:
         "Tag 1 (Unterkörper/Druck)": ["Hip Thrusts", "Brustpresse (Maschine)", "Beinbeuger (Maschine)", "Seitheben", "Planks"],
         "Tag 2 (Rücken/Hüfte)": ["Romanian Deadlifts (mit Zughilfen)", "Kabelrudern (mit Zughilfen)", "Glute Bridge", "Pallof Press", "Wadenheben"]
     }
+    
+    # Detailinformationen zu den Übungen
+    exercise_details = {
+        "Hip Thrusts": {"sets": "3 Sätze x 8-10 Wdh.", "desc": "Schultern auf der Bank, Hüfte explosiv strecken. Das Kniegelenk bleibt unbelastet von Scherkräften, voller Fokus auf das Gesäß."},
+        "Brustpresse (Maschine)": {"sets": "3 Sätze x 8-12 Wdh.", "desc": "Geführte Bewegung, Schulterblätter hinten fixieren. Schont den Ellbogen im Vergleich zum freien Drücken."},
+        "Beinbeuger (Maschine)": {"sets": "3 Sätze x 10-12 Wdh.", "desc": "Bewegung isoliert aus dem Kniegelenk. Keine axiale Stauchung oder Druck auf den Knieknorpel."},
+        "Seitheben": {"sets": "3 Sätze x 12-15 Wdh.", "desc": "Arme nur leicht angewinkelt heben. Vermeide zu starkes Greifen, um den Tennisellbogen nicht zu triggern."},
+        "Planks": {"sets": "3 Sätze x Max. Zeit", "desc": "Unterarmstütz, Rumpf und Gesäß fest anspannen. Komplett statisch, keine Gelenkbelastung."},
+        "Romanian Deadlifts (mit Zughilfen)": {"sets": "3 Sätze x 8-10 Wdh.", "desc": "Hüftdominante Bewegung (Gesäß nach hinten schieben), Knie nur minimal beugen. Zughilfen sind Pflicht für den Ellbogen!"},
+        "Kabelrudern (mit Zughilfen)": {"sets": "3 Sätze x 10-12 Wdh.", "desc": "Breiter Griff, Schulterblätter aktiv zusammenziehen. Auch hier Zughilfen nutzen, um die Unterarme zu entlasten."},
+        "Glute Bridge": {"sets": "3 Sätze x 10-12 Wdh.", "desc": "Aus der Rückenlage die Hüfte heben. Sehr knieschonende Alternative für die hintere Kette."},
+        "Pallof Press": {"sets": "3 Sätze x 10-12 Wdh.", "desc": "Seitlich zum Kabelzug stehen, Griff vor die Brust drücken und den Rotationswiderstand durch den Rumpf ausgleichen."},
+        "Wadenheben": {"sets": "3 Sätze x 12-15 Wdh.", "desc": "Bewegung rein aus dem Sprunggelenk, das Knie bleibt statisch in seiner Position."}
+    }
 
     workout_day = st.selectbox("Welches Workout steht heute an?", list(workouts.keys()))
     exercise = st.selectbox("Übung", workouts[workout_day])
+    
+    # Ausführung und Vorgaben einblenden
+    st.info(f"**🎯 Ziel:** {exercise_details[exercise]['sets']}\n\n**💡 Ablauf:** {exercise_details[exercise]['desc']}")
 
     st.subheader(f"Letzte Sätze: {exercise}")
     history_df = get_exercise_history(exercise)
@@ -95,7 +111,6 @@ with tab1:
         else:
             with st.spinner("Gemini analysiert deine heutigen Sätze..."):
                 try:
-                    # Key wird automatisch aus den Streamlit Secrets geladen
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     model = genai.GenerativeModel('gemini-3.8-flash')
                     
@@ -180,5 +195,38 @@ with tab2:
         unique_ingredients = sorted(list(set(selected_ingredients))) #[cite: 1]
         for item in unique_ingredients:
             st.checkbox(item)
-    else:
-        st.info("Wähle Mahlzeiten aus, um die Liste zu füllen.")
+            
+    st.divider()
+    
+    # NEU: KI-Rezeptgenerator basierend auf vorhandenen Zutaten
+    st.header("👨‍🍳 KI-Resteverwertung")
+    st.write("Was hast du noch im Kühlschrank? Gemini erstellt dir ein passendes Rezept.")
+    
+    available_ingredients = st.text_input("Deine Zutaten (z.B. Paprika, 2 Eier, Reis, Pute)")
+    
+    if st.button("Rezept generieren"):
+        if not available_ingredients:
+            st.warning("Bitte gib zuerst ein paar Zutaten ein.")
+        else:
+            with st.spinner("Gemini kocht..."):
+                try:
+                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    model = genai.GenerativeModel('gemini-3.8-flash')
+                    
+                    recipe_prompt = f"""
+                    Ich habe folgende Zutaten zu Hause: {available_ingredients}.
+                    Erstelle mir daraus ein kurzes, einfaches und leckeres Rezept.
+                    Das Rezept sollte sich grob an den 'Teller-Trick' für Athleten halten (ca. 1/2 Gemüse, 1/4 Protein, 1/4 Kohlenhydrate). 
+                    Ergänze maximal 2-3 absolute Basis-Zutaten (wie Öl, Salz, Pfeffer), falls nötig.
+                    Strukturiere die Antwort mit:
+                    1. **Titel des Gerichts**
+                    2. **Benötigte Zutaten**
+                    3. **Kurze Zubereitung (max. 3 Schritte)**
+                    """
+                    
+                    recipe_response = model.generate_content(recipe_prompt)
+                    st.success("Hier ist dein Rezeptvorschlag:")
+                    st.write(recipe_response.text)
+                except Exception as e:
+                    st.error("Es gab ein Problem bei der Rezeptgenerierung.")
+                    st.write(e)
